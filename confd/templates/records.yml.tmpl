@@ -1,0 +1,6 @@
+groups:
+- name: my_record
+  interval: 30s
+  rules:{{range gets "/records/*"}}{{$item := json .Value}}
+  - record: {{$item.record}}
+    expr: {{$item.expr}}{{end}}

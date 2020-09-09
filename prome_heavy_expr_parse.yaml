@@ -1,0 +1,35 @@
+- name:  fetch log and push expr to cache
+  hosts: all
+  user: root
+  gather_facts:  false
+  vars_files:
+    - config.yaml
+
+  tasks:
+
+      - name: fetch query log
+        fetch: src={{ prome_query_log.prome_log_path }} dest={{ prome_query_log.local_work_dir }}/{{ inventory_hostname }}_query.log flat=yes validate_checksum=no
+        register: result
+
+      - name: Show debug info
+        debug: var=result verbosity=0
+
+
+- name:  localhost
+  hosts: localhost
+  user: root
+  gather_facts:  false
+  vars_files:
+    - config.yaml
+  tasks:
+
+      - name:  merge result
+        shell: cd {{ prome_query_log.local_work_dir }}/../  && /usr/bin/python3 {{ prome_query_log.py_name }}
+        connection: local
+        run_once: true
+
+        register: result
+      - name: Show debug info
+        debug: var=result verbosity=0
+# useage : ansible-playbook -i all_prome_query  prome_heavy_expr_parse.yaml
+

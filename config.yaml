@@ -1,0 +1,21 @@
+prome_query_log:
+  prome_log_path: /App/logs/prometheus_query.log # prometheus query log文件path
+  heavy_query_threhold: 5.0                    # heavy_query阈值
+  py_name: parse_prome_query_log.py            # 主文件名
+  local_work_dir: /App/tgzs/conf_dir/prome_heavy_expr_parse/all_prome_query_log # parser拉取query_log的保存路径
+  check_heavy_query_api: http://localhost:9090  # 一个prometheus查询地址，用来double_check记录是否真的heavy，避免误添加
+
+redis:
+  host: localhost  # redis地址
+  port: 6379
+  redis_set_key: hke:heavy_query_set
+  redis_one_key_prefix: hke:heavy_expr # heavy_query key前缀
+consul:
+  host: localhost  #consul地址
+  port: 8500
+  consul_record_key_prefix: prometheus/records #  heavy_query key前缀
+
+heavy_blacklist_metrics:   # 黑名单metric_names
+  - kafka_log_log_logendoffset
+  - requests_latency_bucket
+  - count(node_cpu_seconds_total)

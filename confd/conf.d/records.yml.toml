@@ -1,0 +1,11 @@
+[template]
+prefix = "/prometheus"
+src = "records.yml.tmpl"
+dest = "/etc/prometheus/rules/record.yml"
+#shards=3
+#num=0
+keys = [
+    "/records"
+]
+reload_cmd = "curl -X POST http://localhost:9090/-/reload"
+
