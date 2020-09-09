@@ -1,5 +1,6 @@
-
+![image](https://github.com/ning1875/pre_query/blob/master/images/arch.jpg)
 ![image](https://github.com/ning1875/pre_query/blob/master/images/heavy_query_diff.png)
+
 # heavy_query原因总结 
 ## 资源原因
 - 因为tsdb都有压缩算法对datapoint压缩，比如dod 和xor
