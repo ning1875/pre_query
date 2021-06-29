@@ -1,3 +1,9 @@
+
+# 课程地址
+- [prometheus全组件配置调优实战，一线大厂监控高可用方案分享](https://ke.qq.com/course/3549215?tuin=361e95b0)
+
+
+# 架构图
 ![image](https://github.com/ning1875/pre_query/blob/master/images/arch.jpg)
 ![image](https://github.com/ning1875/pre_query/blob/master/images/heavy_query_diff.png)
 
