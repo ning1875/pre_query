@@ -3,9 +3,9 @@ import hashlib
 
 import yaml
 
-
 def now_date_str():
-    return datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # return datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    return datetime.datetime.now().strftime("%Y-%m-%d")
 
 
 def get_str_md5(input_str):
@@ -16,5 +16,5 @@ def get_str_md5(input_str):
 
 def load_base_config(yaml_path):
     with open(yaml_path) as f:
-        config = yaml.load(f)
+        config = yaml.load(f,Loader=yaml.FullLoader)
     return config

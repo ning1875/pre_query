@@ -24,7 +24,7 @@
   tasks:
 
       - name:  merge result
-        shell: cd {{ prome_query_log.local_work_dir }}/../  && /usr/bin/python3 {{ prome_query_log.py_name }}
+        shell: /usr/bin/python3 {{ prome_query_log.py_name }}
         connection: local
         run_once: true
 

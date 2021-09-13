@@ -1,18 +1,20 @@
 import base64
 import glob
 import json
+import logging
+import os
+import re
+import sys
 import time
 from datetime import datetime
 from multiprocessing.pool import ThreadPool
 
-import requests
-
-from libs import get_str_md5, load_base_config, now_date_str
 import consul
 import redis
+import requests
 import yaml
 
-import logging
+from libs import get_str_md5, load_base_config, now_date_str
 
 logging.basicConfig(
     # TODO console 日志,上线时删掉
@@ -211,19 +213,28 @@ def parse_log_file(log_f):
             if not isinstance(x, dict):
                 continue
             httpRequest = x.get("httpRequest")
+            if not httpRequest:
+                continue
             path = httpRequest.get("path")
+            # 只处理path为query_range的
             if path != "/api/v1/query_range":
                 continue
             params = x.get("params")
-
+            if not params:
+                continue
             start_time = params.get("start")
             end_time = params.get("end")
             stats = x.get("stats")
-            evalTotalTime = stats.get("timings").get("evalTotalTime")
-            execTotalTime = stats.get("timings").get("execTotalTime")
-            queryPreparationTime = stats.get("timings").get("queryPreparationTime")
-            execQueueTime = stats.get("timings").get("execQueueTime")
-            innerEvalTime = stats.get("timings").get("innerEvalTime")
+            if not stats:
+                continue
+            timings = stats.get("timings")
+            if not timings:
+                continue
+            evalTotalTime = timings.get("evalTotalTime")
+            execTotalTime = timings.get("execTotalTime")
+            queryPreparationTime = timings.get("queryPreparationTime")
+            execQueueTime = timings.get("execQueueTime")
+            innerEvalTime = timings.get("innerEvalTime")
 
             # 如果查询事件段大于6小时则不认为是heavy-query
             if not start_time or not end_time:
@@ -249,8 +260,12 @@ def parse_log_file(log_f):
             if execTotalTime > 40:
                 continue
             query = params.get("query").strip()
+            if not query:
+                continue
             is_bl = False
             for bl in HEAVY_BLACKLIST_METRICS:
+                if not isinstance(bl, str):
+                    continue
                 if bl in query:
                     is_bl = True
                     break
@@ -285,8 +300,9 @@ def parse_log_file(log_f):
     return record_expr_dict
 
 
-def run_log_parse_local_test():
-    res = parse_log_file("local_test.log")
+# 解析一个日志文件
+def run_log_parse_local_test(log_path):
+    res = parse_log_file(log_path)
     print(res)
 
 
@@ -330,8 +346,27 @@ def write_record_yaml_file(record_expr_list):
         ]
 
     }
-    with open("{}/record_{}_{}.yml".format(PROME_RECORD_FILE, len(record_expr_list), now_date_str()), 'w') as f:
+    file_name = "{}/record_{}_{}.yml".format(PROME_RECORD_FILE, len(record_expr_list), now_date_str())
+    with open(file_name, 'w') as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+    if not os.path.isfile("./promtool"):
+        logging.error("promtool not exist skip rule check ")
+        return []
+
+    cmd = "./promtool check rules {}".format(file_name)
+    r = os.popen(cmd)
+    out = r.read()
+    r.close()
+
+    record_name_re = re.compile('.*?\"(%s:.*?)\".*?' % REDIS_ONE_KEY_PREFIX)
+    invalid_keys = []
+    for line in out.strip().split("\n"):
+
+        record_name = re.findall(record_name_re, line)
+        logging.info("[record_name:{}]".format(record_name))
+        if len(record_name) == 1:
+            invalid_keys.append(record_name[0])
+    return invalid_keys
 
 
 def recovery_concurrent_log_parse(res_dic):
@@ -467,6 +502,7 @@ def query_range_judge_heavy(host, expr, record):
 
 
 def concurrent_log_parse(log_dir):
+    # 步骤1 解析日志
     t_num = 500
     pool = ThreadPool(t_num)
 
@@ -480,28 +516,33 @@ def concurrent_log_parse(log_dir):
     for x in results:
         res_dic.update(x)
     logging.info("[before_heavy_query_check_num:{}]".format(len(res_dic)))
-    pool = ThreadPool(t_num)
+    # 1 end
 
-    parms = []
-    for k, v in res_dic.items():
-        expr = res_dic
-        record = k
-        parms.append([CHECK_HEAVY_QUERY_API, expr, record])
-    results = pool.starmap(query_range_judge_heavy, parms)
+    # 步骤2 拿解析结果去查询一下，做double-check，可以禁止
+    # pool = ThreadPool(t_num)
+    #
+    # parms = []
+    # for k, v in res_dic.items():
+    #     expr = res_dic
+    #     record = k
+    #     parms.append([CHECK_HEAVY_QUERY_API, expr, record])
+    # results = pool.starmap(query_range_judge_heavy, parms)
+    #
+    # pool.close()
+    # pool.join()
+    #
+    # res_dic = {}
+    # for x in results:
+    #     expr, record, real_heavy = x[0], x[1], x[2]
+    #     if real_heavy:
+    #         res_dic[record] = expr
+    # logging.info("[after_heavy_query_check_num:{}]".format(len(res_dic)))
+    # 2 end
 
-    pool.close()
-    pool.join()
-
-    res_dic = {}
-    for x in results:
-        expr, record, real_heavy = x[0], x[1], x[2]
-        if real_heavy:
-            res_dic[record] = expr
-
-    logging.info("[after_heavy_query_check_num:{}]".format(len(res_dic)))
     if not res_dic:
         logging.fatal("get empty result exit ....")
 
+    #  步骤3 增量更新consul数据
     consul_client = Consul(CONSUL_HOST, CONSUL_PORT)
     if not consul_client:
         logging.fatal("connect_to_consul_error")
@@ -521,9 +562,23 @@ def concurrent_log_parse(log_dir):
     for k in new_key_set:
         new_dic[k] = res_dic[k]
 
-    record_expr_list = []
+    # 构造record 记录
+    record_list_new = []
     for k in sorted(new_dic.keys()):
-        record_expr_list.append({"record": k, "expr": new_dic.get(k)})
+        one_expr_list = {"record": k, "expr": new_dic.get(k)}
+
+        record_list_new.append(one_expr_list)
+
+    # 写入本地record文件检查rules
+    invalid_keys = write_record_yaml_file(record_list_new)
+    logging.info("invalid_keys: num {}  details:{}".format(len(invalid_keys), str(invalid_keys)))
+    for del_key in invalid_keys:
+        new_dic.pop(del_key)
+    f_record_list_new = []
+    for k in sorted(new_dic.keys()):
+        one_expr_list = {"record": k, "expr": new_dic.get(k)}
+
+        f_record_list_new.append(one_expr_list)
 
     today_all_dic.update(pre_dic)
     today_all_dic.update(new_dic)
@@ -533,13 +588,13 @@ def concurrent_log_parse(log_dir):
         local_record_expr_list.append({"record": k, "expr": today_all_dic.get(k)})
     logging.info("get_all_record_heavy_query:{} ".format(len(local_record_expr_list)))
 
-    # write to local prome record yml
+    # 写入本地yaml
     write_record_yaml_file(local_record_expr_list)
 
-    # write to consul
-
+    # 写入consul中
     new_record_expr_list = []
-    for index, data in enumerate(record_expr_list):
+    # 给record记录添加索引，为confd分片做准备
+    for index, data in enumerate(f_record_list_new):
         new_record_expr_list.append((index + old_len, data))
     if new_record_expr_list:
         consul_w_res = consul_client.txn_mset(new_record_expr_list)
@@ -547,9 +602,9 @@ def concurrent_log_parse(log_dir):
             logging.fatal("write_to_consul_error")
     else:
         logging.info("zero_new_heavy_record:{}")
-    # write to redis
-    if new_dic:
-        mset_record_to_redis(new_dic)
+
+    # 写入redis中
+    mset_record_to_redis(today_all_dic)
 
 
 def run():
@@ -562,7 +617,6 @@ def run():
 
     :return:
     '''
-    # run_log_parse_local_test()
     concurrent_log_parse(PROME_QUERY_LOG_DIR)
 
 
@@ -590,6 +644,9 @@ HEAVY_BLACKLIST_METRICS = config.get("heavy_blacklist_metrics")
 # print(HEAVY_BLACKLIST_METRICS)
 
 if __name__ == '__main__':
+    if len(sys.argv) == 3 and sys.argv[1] == "run_log_parse_local_test":
+        run_log_parse_local_test(sys.argv[2])
+        sys.exit(0)
 
     try:
         run()
